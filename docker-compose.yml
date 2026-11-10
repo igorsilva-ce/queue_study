@@ -1,0 +1,94 @@
+secrets:
+  rabbitmq_password:
+    file: ./secrets/rabbitmq_password.txt
+
+services:
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "127.0.0.1:5672:5672"   # Protocolo AMQP restrito ao localhost
+      - "127.0.0.1:15672:15672" # Interface Web do RabbitMQ (http://localhost:15672)
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?Defina RABBITMQ_USER no arquivo .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?Defina RABBITMQ_PASS no arquivo .env}
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build: .
+    image: queue-celery-app:latest
+    container_name: celery_worker
+    user: "1000:1000"
+    command: celery -A tasks worker --loglevel=info -Q celery,alta_prioridade --concurrency=2
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
+    secrets:
+      - rabbitmq_password
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - .:/app:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  beat:
+    build: .
+    image: queue-celery-app:latest
+    container_name: celery_beat
+    user: "1000:1000"
+    command: celery -A tasks beat --loglevel=info -s /tmp/celerybeat-schedule
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
+    secrets:
+      - rabbitmq_password
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - .:/app:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  flower:
+    build: .
+    image: queue-celery-app:latest
+    container_name: celery_flower
+    user: "1000:1000"
+    command: celery -A tasks flower --port=5555
+    ports:
+      - "127.0.0.1:5555:5555" # Interface Web do Flower restrita ao localhost
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
+    secrets:
+      - rabbitmq_password
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      worker:
+        condition: service_started

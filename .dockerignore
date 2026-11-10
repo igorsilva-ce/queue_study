@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+__pycache__
+.ruff_cache
+.pytest_cache
+.idea
+.vscode
+*.pyc
+celerybeat-schedule*
+README.md
+.env
+.env.*
+secrets/

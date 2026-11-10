@@ -1,0 +1,29 @@
+# Ambientes virtuais
+.venv/
+venv/
+ENV/
+
+# Bytecode e cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ferramentas de lint, formatação e testes
+.ruff_cache/
+.pytest_cache/
+.coverage
+
+# Arquivos locais gerados pelo Celery Beat
+celerybeat-schedule*
+
+# IDEs e Sistema Operacional
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Variáveis de ambiente e segredos (NUNCA versionar no Git)
+.env
+.env.*
+!.env.example
+secrets/

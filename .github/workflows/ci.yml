@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Configurar Python e dependências
+        run: uv sync --frozen
+
+      - name: Verificar lint com Ruff
+        run: uv run ruff check .
+
+      - name: Verificar formatação com Ruff
+        run: uv run ruff format --check .
+
+      - name: Executar testes unitários das tasks
+        run: uv run python -m unittest -v
+
