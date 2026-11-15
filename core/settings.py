@@ -25,9 +25,14 @@ _secret_key = read_secret(
     secret_name="django_secret_key",
     base_dir=BASE_DIR,
 )
+_allow_ephemeral_commands = {"test", "spectacular", "check"}
 if not _secret_key:
-    if DEBUG or "test" in sys.argv or "spectacular" in sys.argv:
-        # Chave efêmera apenas para testes/geração de schema em CI sem segredos locais
+    if (
+        DEBUG
+        or os.getenv("DJANGO_ALLOW_EPHEMERAL_SECRET") == "1"
+        or bool(_allow_ephemeral_commands.intersection(sys.argv))
+    ):
+        # Chave efêmera apenas para CI/testes/geração de schema sem segredos locais
         _secret_key = secrets.token_urlsafe(48)
     else:
         raise ImproperlyConfigured(

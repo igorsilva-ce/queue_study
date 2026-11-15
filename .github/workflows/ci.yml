@@ -9,6 +9,9 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    env:
+      DJANGO_ALLOW_EPHEMERAL_SECRET: "1"
+      DJANGO_USE_LOCMEM_CACHE: "1"
 
     steps:
       - name: Checkout do código
