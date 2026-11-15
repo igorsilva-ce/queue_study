@@ -73,6 +73,7 @@ services:
       RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
       REDIS_HOST: redis
       REDIS_PASS_FILE: /run/secrets/redis_password
+      REDIS_CACHE_DB: "1"
     secrets:
       - django_secret_key
       - api_demo_password
@@ -111,6 +112,7 @@ services:
       RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
       REDIS_HOST: redis
       REDIS_PASS_FILE: /run/secrets/redis_password
+      REDIS_CACHE_DB: "1"
     secrets:
       - django_secret_key
       - rabbitmq_password
@@ -141,6 +143,7 @@ services:
       RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
       REDIS_HOST: redis
       REDIS_PASS_FILE: /run/secrets/redis_password
+      REDIS_CACHE_DB: "1"
     secrets:
       - django_secret_key
       - rabbitmq_password
@@ -173,6 +176,7 @@ services:
       RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
       REDIS_HOST: redis
       REDIS_PASS_FILE: /run/secrets/redis_password
+      REDIS_CACHE_DB: "1"
     secrets:
       - django_secret_key
       - rabbitmq_password

@@ -8,6 +8,7 @@ from .views import (
     HelloTaskView,
     ParallelSumTaskView,
     PaymentTaskView,
+    TaskCatalogView,
     TaskStatusView,
     UrgentEmailTaskView,
 )
@@ -15,6 +16,7 @@ from .views import (
 urlpatterns = [
     path("health/", HealthCheckView.as_view(), name="health-check"),
     path("auth/token/", AuthTokenView.as_view(), name="auth-token"),
+    path("tasks/catalogo/", TaskCatalogView.as_view(), name="task-catalog"),
     path("tasks/hello/", HelloTaskView.as_view(), name="task-hello"),
     path(
         "tasks/email-urgente/", UrgentEmailTaskView.as_view(), name="task-urgent-email"

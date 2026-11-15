@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.management import call_command
 from django.urls import reverse
 from rest_framework import status
@@ -16,6 +17,7 @@ class QueueApiTestCase(APITestCase):
     """Testes da API DRF, autenticação por Token, documentação OpenAPI e despacho Celery."""
 
     def setUp(self) -> None:
+        cache.clear()
         self.user_model = get_user_model()
         self.password = "StrongTestPass_2026!"
         self.user = self.user_model.objects.create_user(
@@ -144,7 +146,9 @@ class QueueApiTestCase(APITestCase):
         self.assertEqual(response.data["status"], "QUEUED")
 
     @patch("queue_api.views.AsyncResult")
-    def test_consultar_status_task(self, mock_async_result: MagicMock) -> None:
+    def test_consultar_status_task_com_cache(
+        self, mock_async_result: MagicMock
+    ) -> None:
         mock_instance = MagicMock(status="SUCCESS")
         mock_instance.ready.return_value = True
         mock_instance.successful.return_value = True
@@ -153,10 +157,26 @@ class QueueApiTestCase(APITestCase):
         mock_async_result.return_value = mock_instance
         self._authenticate()
 
-        response = self.client.get(reverse("task-status", args=["abc-123"]))
+        url = reverse("task-status", args=["abc-123"])
+        first_resp = self.client.get(url)
+        self.assertEqual(first_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(first_resp.data["status"], "SUCCESS")
+        self.assertEqual(first_resp.data["result"], "Hello, Django!")
+        self.assertFalse(first_resp.data["cached"])
+        self.assertEqual(first_resp.headers["X-Cache"], "MISS")
+
+        # Segunda leitura deve vir do cache sem consultar o AsyncResult novamente
+        second_resp = self.client.get(url)
+        self.assertEqual(second_resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(second_resp.data["cached"])
+        self.assertEqual(second_resp.headers["X-Cache"], "HIT")
+        self.assertEqual(mock_async_result.call_count, 1)
+
+    def test_catalogo_tasks_cacheado(self) -> None:
+        response = self.client.get(reverse("task-catalog"))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["status"], "SUCCESS")
-        self.assertEqual(response.data["result"], "Hello, Django!")
+        self.assertEqual(response.data["cache_ttl_segundos"], 60)
+        self.assertIn("alta_prioridade", response.data["filas"])
 
     def test_bootstrap_api_user_command_com_secret_file(self) -> None:
         with TemporaryDirectory() as tmp_dir:

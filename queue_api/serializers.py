@@ -110,6 +110,28 @@ class TaskStatusResponseSerializer(serializers.Serializer):
         allow_null=True,
         help_text="Descrição do erro caso a tarefa tenha falhado.",
     )
+    cached = serializers.BooleanField(
+        default=False,
+        help_text="True quando a resposta foi servida diretamente do cache Redis.",
+    )
+
+
+class TaskCatalogItemSerializer(serializers.Serializer):
+    nome = serializers.CharField(help_text="Nome da task registrada no Celery.")
+    fila = serializers.CharField(help_text="Fila padrão utilizada no RabbitMQ.")
+    endpoint = serializers.CharField(help_text="Rota HTTP correspondente na API DRF.")
+    descricao = serializers.CharField(help_text="Objetivo didático da tarefa.")
+
+
+class TaskCatalogResponseSerializer(serializers.Serializer):
+    cache_ttl_segundos = serializers.IntegerField(
+        help_text="Tempo de cache da view no Redis (cache_page)."
+    )
+    filas = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="Filas configuradas no RabbitMQ.",
+    )
+    tasks = TaskCatalogItemSerializer(many=True)
 
 
 class GroupStatusResponseSerializer(serializers.Serializer):

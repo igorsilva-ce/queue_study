@@ -6,7 +6,13 @@ from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 from kombu import Queue
 
-from .secrets import build_broker_url, build_result_backend, load_dotenv, read_secret
+from .secrets import (
+    build_broker_url,
+    build_cache_url,
+    build_result_backend,
+    load_dotenv,
+    read_secret,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR)
@@ -113,8 +119,34 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": os.getenv("DRF_THROTTLE_ANON", "30/minute"),
+        "user": os.getenv("DRF_THROTTLE_USER", "120/minute"),
+    },
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
+
+if "test" in sys.argv or os.getenv("DJANGO_USE_LOCMEM_CACHE") == "1":
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "queue-test-cache",
+        }
+    }
+else:
+    # Usa o backend nativo RedisCache do Django (DB 1 separado dos resultados do Celery)
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": build_cache_url(BASE_DIR),
+            "KEY_PREFIX": "queue_cache",
+            "TIMEOUT": 300,
+        }
+    }
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Queue API — Django, DRF, Celery & RabbitMQ",

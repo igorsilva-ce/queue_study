@@ -1,6 +1,9 @@
 from celery import chain, group
 from celery.result import AsyncResult, GroupResult
 from django.contrib.auth import authenticate
+from django.core.cache import cache
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.authtoken.models import Token
@@ -21,6 +24,7 @@ from .serializers import (
     HelloTaskRequestSerializer,
     ParallelSumRequestSerializer,
     PaymentTaskRequestSerializer,
+    TaskCatalogResponseSerializer,
     TaskQueuedResponseSerializer,
     TaskStatusResponseSerializer,
     UrgentEmailRequestSerializer,
@@ -198,15 +202,83 @@ class EtlPipelineTaskView(APIView):
         return _queued_response(async_result.id, "celery")
 
 
+class TaskCatalogView(APIView):
+    """Retorna o catálogo de tasks e filas usando cache de página no Redis (60s)."""
+
+    permission_classes = (AllowAny,)
+
+    @method_decorator(cache_page(60))
+    @extend_schema(
+        tags=["Monitoramento"],
+        summary="Catálogo de Filas e Tasks (Cacheado no Redis)",
+        description=(
+            "Demonstra o decorator `@cache_page(60)` do Django armazenando a resposta "
+            "completa no Redis (DB 1) por 60 segundos."
+        ),
+        responses={200: TaskCatalogResponseSerializer},
+    )
+    def get(self, request: Request) -> Response:
+        return Response(
+            {
+                "cache_ttl_segundos": 60,
+                "filas": ["celery", "alta_prioridade"],
+                "tasks": [
+                    {
+                        "nome": "queue_api.tasks.hello_world",
+                        "fila": "celery",
+                        "endpoint": "/api/tasks/hello/",
+                        "descricao": "Tarefa assíncrona básica Hello World.",
+                    },
+                    {
+                        "nome": "queue_api.tasks.enviar_email_urgente",
+                        "fila": "alta_prioridade",
+                        "endpoint": "/api/tasks/email-urgente/",
+                        "descricao": "Roteamento para fila de alta prioridade.",
+                    },
+                    {
+                        "nome": "queue_api.tasks.processar_pagamento",
+                        "fila": "celery",
+                        "endpoint": "/api/tasks/pagamento/",
+                        "descricao": "Simulação de retries automáticos em falhas.",
+                    },
+                    {
+                        "nome": "queue_api.tasks.somar",
+                        "fila": "celery",
+                        "endpoint": "/api/tasks/workflows/soma-paralela/",
+                        "descricao": "Execução paralela com Celery group.",
+                    },
+                    {
+                        "nome": "queue_api.tasks.extrair_dados -> transformar_dados -> salvar_dados",
+                        "fila": "celery",
+                        "endpoint": "/api/tasks/workflows/pipeline-etl/",
+                        "descricao": "Pipeline sequencial ETL com Celery chain.",
+                    },
+                ],
+            }
+        )
+
+
 class TaskStatusView(APIView):
-    """Consulta o status e o resultado de uma task pelo seu `task_id` no Redis."""
+    """Consulta o status e o resultado de uma task usando cache Redis para tasks finalizadas."""
 
     @extend_schema(
         tags=["Monitoramento"],
-        summary="Consultar Status de uma Task",
+        summary="Consultar Status de uma Task (com Cache Redis)",
+        description=(
+            "Consulta o status no Result Backend (Redis DB 0). Quando a tarefa finaliza, "
+            "a resposta é salva no Redis Cache (DB 1) por 5 minutos, retornando header "
+            "`X-Cache: HIT` nas leituras seguintes."
+        ),
         responses={200: TaskStatusResponseSerializer},
     )
     def get(self, request: Request, task_id: str) -> Response:
+        cache_key = f"task_status:{task_id}"
+        cached_payload = cache.get(cache_key)
+        if cached_payload is not None:
+            response = Response({**cached_payload, "cached": True})
+            response["X-Cache"] = "HIT"
+            return response
+
         async_result = AsyncResult(task_id, app=celery_app)
         ready = async_result.ready()
         successful = async_result.successful() if ready else None
@@ -219,16 +291,21 @@ class TaskStatusView(APIView):
             else:
                 result_value = async_result.result
 
-        return Response(
-            {
-                "task_id": task_id,
-                "status": async_result.status,
-                "ready": ready,
-                "successful": successful,
-                "result": result_value,
-                "error": error_value,
-            }
-        )
+        payload = {
+            "task_id": task_id,
+            "status": async_result.status,
+            "ready": ready,
+            "successful": successful,
+            "result": result_value,
+            "error": error_value,
+            "cached": False,
+        }
+        if ready:
+            cache.set(cache_key, payload, timeout=300)
+
+        response = Response(payload)
+        response["X-Cache"] = "MISS"
+        return response
 
 
 class GroupStatusView(APIView):

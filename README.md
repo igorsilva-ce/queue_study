@@ -27,18 +27,25 @@ Cliente HTTP (Swagger / curl)
 - **RabbitMQ (`rabbitmq`)**: *Message Broker* (protocolo AMQP). Recebe as mensagens das tasks e distribui entre as filas `celery` e `alta_prioridade`.
 - **Celery Worker (`worker`)**: Consome as filas do RabbitMQ e executa as funções Python em background (com retries automáticos, `group` paralelo e `chain` sequencial).
 - **Celery Beat (`beat`)**: Agendador periódico que envia a task `heartbeat_sistema` a cada 30 segundos.
-- **Redis (`redis`)**: *Result Backend* compartilhado entre os containers. Permite consultar o status e o retorno de qualquer `task_id` ou `group_id` via API (`GET /api/tasks/{task_id}/`).
+- **Redis (`redis`)**: Atua em **dois papéis isolados por índice de banco** no mesmo servidor:
+  - **DB 0 (`Result Backend` do Celery)**: Guarda estados e resultados das tasks (`task_id` / `group_id`).
+  - **DB 1 (`Cache` do Django e DRF)**: Armazena cache de respostas da API (`cache_page` e `cache.get/set`) e controle de *Rate Limiting* (throttling).
 - **Flower (`flower`)**: Interface web para monitorar workers, filas e histórico de tarefas em tempo real.
 
 ---
 
-## Como o Redis funciona neste projeto (Result Backend)
+## Como o Redis funciona neste projeto (Result Backend + Cache Django/DRF)
 
 Ao estudar Celery com RabbitMQ, é comum se perguntar: *"Se já tenho o RabbitMQ, por que adicionar o Redis?"*
 
-1. **RabbitMQ (Message Broker) vs. Redis (Result Backend)**:
+1. **RabbitMQ (Message Broker) vs. Redis (Result Backend + Cache)**:
    - **RabbitMQ** é especializado em **mensageria (AMQP)**: garantir que a tarefa chegue ao Worker certo (`celery` ou `alta_prioridade`) e não se perca caso um worker caia.
-   - **Redis** é um banco **chave-valor em memória** extremamente rápido, usado aqui como **Result Backend** para guardar o histórico recente de execução e o valor do `return` das tasks.
+   - **Redis** é um banco **chave-valor em memória** extremamente rápido. Aqui ele separa responsabilidades em dois bancos lógicos:
+     - **`DB 0` (Celery Result Backend)**: Guarda estados (`PENDING`, `STARTED`, `RETRY`, `SUCCESS`, `FAILURE`) e retornos das tasks.
+     - **`DB 1` (Cache do Django e DRF)**: Usa o backend nativo `django.core.cache.backends.redis.RedisCache` (`core/settings.py`) para:
+       1. **Cache manual (`cache.get` / `cache.set`)** em `GET /api/tasks/{task_id}/`: após uma task finalizar, o resultado fica em cache por 5 minutos (`X-Cache: MISS` na 1ª leitura e `X-Cache: HIT` + `"cached": true` nas próximas).
+       2. **Cache de view (`@cache_page(60)`)** em `GET /api/tasks/catalogo/`: armazena a resposta inteira no Redis por 60 segundos.
+       3. **Rate Limiting (Throttling do DRF)**: `AnonRateThrottle` (`30/min`) e `UserRateThrottle` (`120/min`) usam o Redis para limitar requisições mesmo entre múltiplos containers/workers HTTP.
 
 2. **Por que não usar apenas `rpc://` no RabbitMQ com Django?**
    - O backend `rpc://` cria filas temporárias e exclusivas por processo cliente. Em uma API HTTP, quem recebe o `POST /api/tasks/hello/` pode não ser o mesmo processo/thread que atende o `GET /api/tasks/{task_id}/`.
@@ -47,10 +54,10 @@ Ao estudar Celery com RabbitMQ, é comum se perguntar: *"Se já tenho o RabbitMQ
 3. **Ciclo de vida e chaves armazenadas no Redis** (`core/settings.py`):
    - `CELERY_TASK_TRACK_STARTED = True`: grava o estado `STARTED` no Redis assim que o Worker pega a tarefa.
    - `CELERY_RESULT_EXTENDED = True`: inclui metadados (nome da task, argumentos e fila) no JSON salvo no Redis.
-   - `CELERY_RESULT_EXPIRES = 3600`: aplica **TTL de 1 hora** em cada chave, evitando que o Redis cresça indefinidamente em memória.
+   - `CELERY_RESULT_EXPIRES = 3600`: aplica **TTL de 1 hora** em cada chave no `DB 0`, evitando que o Redis cresça indefinidamente em memória.
    - Padrão das chaves criadas:
-     - `celery-task-meta-<task_id>` (resultado e estado de uma tarefa individual)
-     - `celery-taskset-meta-<group_id>` (estado consolidado de um `group` salvo com `.save()`)
+     - **DB 0**: `celery-task-meta-<task_id>` e `celery-taskset-meta-<group_id>`
+     - **DB 1**: `:1:queue_cache:...` (cache de endpoints e contadores de throttling do DRF)
    - **Estados possíveis**: `PENDING` $\rightarrow$ `STARTED` $\rightarrow$ `RETRY` (se houver tentativa repetida) $\rightarrow$ `SUCCESS` ou `FAILURE`.
 
 4. **Segurança e Persistência do Redis no Docker (`docker-compose.yml`)**:
@@ -60,14 +67,17 @@ Ao estudar Celery com RabbitMQ, é comum se perguntar: *"Se já tenho o RabbitMQ
 
 5. **Inspecionando o Redis na prática (para estudos)**:
 ```powershell
-# Listar todas as chaves de tarefas gravadas pelo Celery
-docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli KEYS "celery-task*"'
+# DB 0: Listar chaves de resultados gravadas pelo Celery
+docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli -n 0 KEYS "celery-task*"'
+
+# DB 1: Listar chaves de cache e throttling gravadas pelo Django/DRF
+docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli -n 1 KEYS "*queue_cache*"'
 
 # Ler o JSON completo salvo para uma task específica (substitua pelo task_id)
-docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli GET "celery-task-meta-SEU_TASK_ID"'
+docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli -n 0 GET "celery-task-meta-SEU_TASK_ID"'
 
 # Ver quanto tempo falta (TTL em segundos) para a chave expirar automaticamente
-docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli TTL "celery-task-meta-SEU_TASK_ID"'
+docker compose exec redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli -n 0 TTL "celery-task-meta-SEU_TASK_ID"'
 ```
 
 ---
@@ -157,6 +167,7 @@ curl.exe http://localhost:8000/api/tasks/SEU_TASK_ID_AQUI/ `
 | `GET` | `/api/health/` | Pública | Healthcheck da API |
 | `POST` | `/api/auth/token/` | Pública | Troca usuário/senha por Token DRF |
 | `GET` | `/api/docs/` | Pública | Swagger UI gerado via `drf-spectacular` |
+| `GET` | `/api/tasks/catalogo/` | Pública | Catálogo de filas/tasks cacheado 60s no Redis (`@cache_page`) |
 | `POST` | `/api/tasks/hello/` | Token | Enfileira `hello_world` na fila padrão `celery` |
 | `POST` | `/api/tasks/email-urgente/` | Token | Enfileira na fila `alta_prioridade` |
 | `POST` | `/api/tasks/pagamento/` | Token | Demonstra retries automáticos em falhas |

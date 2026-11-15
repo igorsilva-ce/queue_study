@@ -59,11 +59,8 @@ def build_broker_url(base_dir: Path) -> str:
     return f"amqp://{user}:{password}@{host}:{port}//"
 
 
-def build_result_backend(base_dir: Path) -> str:
-    """Monta a URL do Redis usada como Result Backend compartilhado do Celery."""
-    if explicit_backend := os.getenv("CELERY_RESULT_BACKEND"):
-        return explicit_backend
-
+def _build_redis_url(base_dir: Path, db_env_var: str, default_db: str) -> str:
+    """Constrói uma URL Redis autenticada para um índice de banco específico."""
     password = quote(
         read_secret(
             env_var="REDIS_PASS",
@@ -75,6 +72,20 @@ def build_result_backend(base_dir: Path) -> str:
     )
     host = os.getenv("REDIS_HOST", "localhost")
     port = os.getenv("REDIS_PORT", "6379")
-    db = os.getenv("REDIS_DB", "0")
+    db = os.getenv(db_env_var, default_db)
     auth_part = f":{password}@" if password else ""
     return f"redis://{auth_part}{host}:{port}/{db}"
+
+
+def build_result_backend(base_dir: Path) -> str:
+    """Monta a URL do Redis usada como Result Backend compartilhado do Celery (DB 0)."""
+    if explicit_backend := os.getenv("CELERY_RESULT_BACKEND"):
+        return explicit_backend
+    return _build_redis_url(base_dir, db_env_var="REDIS_DB", default_db="0")
+
+
+def build_cache_url(base_dir: Path) -> str:
+    """Monta a URL do Redis usada como Cache do Django e DRF (DB 1)."""
+    if explicit_cache := os.getenv("DJANGO_CACHE_URL"):
+        return explicit_cache
+    return _build_redis_url(base_dir, db_env_var="REDIS_CACHE_DB", default_db="1")
