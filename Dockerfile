@@ -15,9 +15,10 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Instala as dependências usando o lockfile e ajusta permissões para o usuário não-root
+# Instala as dependências usando o lockfile e prepara o diretório gravável /app/data
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project \
+    && mkdir -p /app/data \
     && chown -R appuser:appgroup /opt/venv /app
 
 # Copia o código da aplicação já pertencendo ao usuário sem privilégios

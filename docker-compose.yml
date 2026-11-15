@@ -1,6 +1,14 @@
 secrets:
   rabbitmq_password:
     file: ./secrets/rabbitmq_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  django_secret_key:
+    file: ./secrets/django_secret_key.txt
+  api_demo_password:
+    file: ./secrets/api_demo_password.txt
+  api_auth_token:
+    file: ./secrets/api_auth_token.txt
 
 services:
   rabbitmq:
@@ -22,19 +30,91 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis_backend
+    ports:
+      - "127.0.0.1:6379:6379" # Result Backend restrito ao localhost
+    command:
+      - sh
+      - -c
+      - exec redis-server --requirepass "$$(cat /run/secrets/redis_password)" --appendonly yes
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_password)\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    image: queue-celery-app:latest
+    container_name: django_web
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:8000:8000" # API DRF + Swagger/ReDoc restritos ao localhost
+    command:
+      - sh
+      - -c
+      - python manage.py migrate --noinput && python manage.py bootstrap_api_user && python manage.py runserver 0.0.0.0:8000
+    env_file:
+      - .env
+    environment:
+      DJANGO_DB_DIR: /app/data
+      DJANGO_SECRET_KEY_FILE: /run/secrets/django_secret_key
+      API_DEMO_PASSWORD_FILE: /run/secrets/api_demo_password
+      API_AUTH_TOKEN_FILE: /run/secrets/api_auth_token
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
+      REDIS_HOST: redis
+      REDIS_PASS_FILE: /run/secrets/redis_password
+    secrets:
+      - django_secret_key
+      - api_demo_password
+      - api_auth_token
+      - rabbitmq_password
+      - redis_password
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - .:/app:ro
+      - sqlite_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   worker:
     build: .
     image: queue-celery-app:latest
     container_name: celery_worker
     user: "1000:1000"
-    command: celery -A tasks worker --loglevel=info -Q celery,alta_prioridade --concurrency=2
+    command: celery -A core worker --loglevel=info -Q celery,alta_prioridade --concurrency=2
     env_file:
       - .env
     environment:
+      DJANGO_SECRET_KEY_FILE: /run/secrets/django_secret_key
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
+      REDIS_HOST: redis
+      REDIS_PASS_FILE: /run/secrets/redis_password
     secrets:
+      - django_secret_key
       - rabbitmq_password
+      - redis_password
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -43,6 +123,8 @@ services:
       - .:/app:ro
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   beat:
@@ -50,14 +132,19 @@ services:
     image: queue-celery-app:latest
     container_name: celery_beat
     user: "1000:1000"
-    command: celery -A tasks beat --loglevel=info -s /tmp/celerybeat-schedule
+    command: celery -A core beat --loglevel=info -s /tmp/celerybeat-schedule
     env_file:
       - .env
     environment:
+      DJANGO_SECRET_KEY_FILE: /run/secrets/django_secret_key
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
+      REDIS_HOST: redis
+      REDIS_PASS_FILE: /run/secrets/redis_password
     secrets:
+      - django_secret_key
       - rabbitmq_password
+      - redis_password
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -67,22 +154,29 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
   flower:
     build: .
     image: queue-celery-app:latest
     container_name: celery_flower
     user: "1000:1000"
-    command: celery -A tasks flower --port=5555
+    command: celery -A core flower --port=5555
     ports:
       - "127.0.0.1:5555:5555" # Interface Web do Flower restrita ao localhost
     env_file:
       - .env
     environment:
+      DJANGO_SECRET_KEY_FILE: /run/secrets/django_secret_key
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PASS_FILE: /run/secrets/rabbitmq_password
+      REDIS_HOST: redis
+      REDIS_PASS_FILE: /run/secrets/redis_password
     secrets:
+      - django_secret_key
       - rabbitmq_password
+      - redis_password
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -90,5 +184,11 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       worker:
         condition: service_started
+
+volumes:
+  sqlite_data:
+  redis_data:

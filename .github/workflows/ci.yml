@@ -26,6 +26,10 @@ jobs:
       - name: Verificar formatação com Ruff
         run: uv run ruff format --check .
 
-      - name: Executar testes unitários das tasks
-        run: uv run python -m unittest -v
+      - name: Validar configurações Django e schema OpenAPI
+        run: |
+          uv run python manage.py check
+          uv run python manage.py spectacular --validate --fail-on-warn --file /dev/null
 
+      - name: Executar testes Django/DRF e tasks Celery
+        run: uv run python manage.py test -v 2
